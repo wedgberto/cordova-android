@@ -862,7 +862,8 @@ describe('relocate CordovaActivity class java file', () => {
             },
             locations: {
                 plugins: '/mock/plugins',
-                www: '/mock/www'
+                www: '/mock/www',
+                strings: '/mock/res/values/strings.xml'
             }
         };
 
@@ -893,16 +894,16 @@ describe('relocate CordovaActivity class java file', () => {
                 }));
         spyOn(GradlePropertiesParser.prototype, 'configure');
 
-        replaceFileContents = spyOn(utils, 'replaceFileContents');
+        spyOn(utils, 'replaceFileContents');
+
+        //prepare.__set__('parseElementtreeSync', jasmine.createSpy('parseElementtreeSync').and.returnValue());
 
         api = new Api();
     });
 
-    it('moves CordovaActivity class java file to path that tracks the package name', () => {
-        expectAsync(
-            api.prepare(cordovaProject, options).then(() => {
-                expect(replaceFileContents).toHaveBeenCalledWith(`srcx/main/java/${packageName.replace(/\./g, '/')}/Standardactivity.java`, /package [\w.]*;/, 'package ' + packageName + ';');
-            })
-        ).toBeResolved();
+    fit('moves CordovaActivity class java file to path that tracks the package name', async () => {
+        await api.prepare(cordovaProject, options).then(() => {
+            expect(replaceFileContents).toHaveBeenCalledWith(`srcx/main/java/${packageName.replace(/\./g, '/')}/Standardactivity.java`, /package [\w.]*;/, 'package ' + packageName + ';');
+        });
     });
 });
