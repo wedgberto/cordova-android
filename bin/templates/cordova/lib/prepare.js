@@ -259,9 +259,9 @@ function updateProjectAccordingTo (platformConfig, locations) {
         events.emit('verbose', newDestFile);
         fs.copySync(destFile, newDestFile);
         destFile = newDestFile;
+        utils.replaceFileContents(destFile, /package [\w.]*;/, 'package ' + androidPkgName + ';');
+        events.emit('verbose', 'Wrote out Android package name "' + androidPkgName + '" to ' + destFile);
     }
-    utils.replaceFileContents(destFile, /package [\w.]*;/, 'package ' + androidPkgName + ';');
-    events.emit('verbose', 'Wrote out Android package name "' + androidPkgName + '" to ' + destFile);
 
     var removeOrigPkg = checkReqs.isWindows() || checkReqs.isDarwin()
         ? manifestId.toUpperCase() !== androidPkgName.toUpperCase()
