@@ -21,6 +21,7 @@ var rewire = require('rewire');
 var path = require('path');
 var utils = require('../../bin/templates/cordova/lib/utils');
 var CordovaError = require('cordova-common').CordovaError;
+const et = require('elementtree');
 const GradlePropertiesParser = require('../../bin/templates/cordova/lib/config/GradlePropertiesParser');
 
 const PATH_RESOURCE = path.join('platforms', 'android', 'app', 'src', 'main', 'res');
@@ -855,23 +856,36 @@ describe('prepare', () => {
 
         // Spies
         let replaceFileContents;
+        let ensureDirSyncSpy;
+        let copySyncSpy;
 
         // Mock Data
         let cordovaProject;
         let options;
         let packageName;
 
+        let initialJavaActivityPath;
+
         beforeEach(() => {
             Api = rewire('../../bin/templates/cordova/Api');
             prepare = rewire('../../bin/templates/cordova/lib/prepare');
-            packageName = 'com.company.product';
+            // packageName = 'com.company.renamed';
+            api = new Api();
+
+            initialJavaActivityPath = `${api.locations.javaSrc}/com/company/product/MainActivity.java`.replace(/\//g, '\\');
 
             cordovaProject = {
                 root: '/mock',
                 projectConfig: {
                     path: '/mock/config.xml',
                     cdvNamespacePrefix: 'cdv',
-                    android_packageName: () => packageName
+                    shortName: () => 'rn',
+                    name: () => 'rename',
+                    android_versionCode: jasmine.createSpy('android_versionCode'),
+                    android_packageName: () => packageName,
+                    packageName: () => packageName,
+                    getPreference: jasmine.createSpy('getPreference'),
+                    version: () => '1.0.0'
                 },
                 locations: {
                     plugins: '/mock/plugins',
@@ -891,158 +905,214 @@ describe('prepare', () => {
 
             Api.__set__('prepare', prepare.prepare);
 
-            prepare.__set__('events', {
-                emit: jasmine.createSpy('emit')
-            });
-            prepare.__set__('updateWww', jasmine.createSpy());
-            // prepare.__set__('updateProjectAccordingTo', jasmine.createSpy('updateProjectAccordingTo')
-            //     .and.returnValue(Promise.resolve()));
+            prepare.__set__('updateWww', jasmine.createSpy('updateWww'));
             prepare.__set__('updateIcons', jasmine.createSpy('updateIcons').and.returnValue(Promise.resolve()));
             prepare.__set__('updateSplashes', jasmine.createSpy('updateSplashes').and.returnValue(Promise.resolve()));
             prepare.__set__('updateFileResources', jasmine.createSpy('updateFileResources').and.returnValue(Promise.resolve()));
             prepare.__set__('updateConfigFilesFrom',
                 jasmine.createSpy('updateConfigFilesFrom')
-                    .and.returnValue({
-                        getPreference: jasmine.createSpy('getPreference')
-                    }));
+                    .and.returnValue(cordovaProject.projectConfig
+                    ));
+            prepare.__set__('glob', {
+                sync: jasmine.createSpy('sync').and.returnValue({
+                    filter: jasmine.createSpy('filter').and.returnValue([
+                        initialJavaActivityPath
+                    ])
+                })
+            });
+            // prepare.__set__('events', {
+            //     emit: function () {
+            //         console.log(arguments);
+            //     }
+            // });
             spyOn(GradlePropertiesParser.prototype, 'configure');
 
-            spyOn(utils, 'replaceFileContents');
+            replaceFileContents = spyOn(utils, 'replaceFileContents');
 
-            //prepare.__set__('parseElementtreeSync', jasmine.createSpy('parseElementtreeSync').and.returnValue());
+            prepare.__set__('AndroidManifest', jasmine.createSpy('AndroidManifest').and.returnValue({
+                getPackageId: () => packageName,
+                getActivity: jasmine.createSpy('getActivity').and.returnValue({
+                    setOrientation: jasmine.createSpy('setOrientation').and.returnValue({
+                        setLaunchMode: jasmine.createSpy('setLaunchValue')
+                    })
+                }),
+                setVersionName: jasmine.createSpy('setVersionName').and.returnValue({
+                    setVersionCode: jasmine.createSpy('setVersionCode').and.returnValue({
+                        setPackageId: jasmine.createSpy('setPackageId').and.returnValue({
+                            write: jasmine.createSpy('write')
+                        })
+                    })
+                })
+            }));
 
-            api = new Api();
+            prepare.__set__('xmlHelpers', {
+                parseElementtreeSync: jasmine.createSpy('parseElementtreeSync').and.returnValue(et.parse(`<?xml version="1.0" encoding="utf-8"?>
+                <resources>
+                    <!-- App label shown within list of installed apps, battery & network usage screens. -->
+                    <string name="app_name">__NAME__</string>
+                    <!-- App label shown on the launcher. -->
+                    <string name="launcher_name">@string/app_name</string>
+                    <!-- App label shown on the task switcher. -->
+                    <string name="activity_name">@string/launcher_name</string>
+                </resources>
+                `))
+            });
+
+            ensureDirSyncSpy = jasmine.createSpy('ensureDirSync');
+            copySyncSpy = jasmine.createSpy('copySync');
+
+            prepare.__set__('fs', {
+                writeFileSync: jasmine.createSpy('writeFileSync'),
+                ensureDirSync: ensureDirSyncSpy,
+                copySync: copySyncSpy
+            });
         });
 
-        fit('moves CordovaActivity class java file to path that tracks the package name', async () => {
+        it('moves CordovaActivity class java file to path that tracks the package name when package name changed', async () => {
+            packageName = 'com.company.renamed';
+            const renamedPath = `${api.locations.javaSrc}/${packageName.replace(/\./g, '/')}`.replace(/\//g, '\\');
+            const renamedJavaActivityPath = `${renamedPath}\\MainActivity.java`;
+
             await api.prepare(cordovaProject, options).then(() => {
-                expect(replaceFileContents).toHaveBeenCalledWith(`srcx/main/java/${packageName.replace(/\./g, '/')}/Standardactivity.java`, /package [\w.]*;/, 'package ' + packageName + ';');
+                expect(replaceFileContents).toHaveBeenCalledWith(renamedJavaActivityPath, /package [\w.]*;/, 'package ' + packageName + ';');
+                expect(ensureDirSyncSpy).toHaveBeenCalledWith(renamedPath);
+                expect(copySyncSpy).toHaveBeenCalledWith(initialJavaActivityPath, renamedJavaActivityPath);
             });
         });
 
-        describe('updateSplashes method', function () {
-            // Rewire
-            let prepare;
+        it('doesn\'t move CordovaActivity class java file when package name not changed', async () => {
+            packageName = 'com.company.product';
 
-            // Spies
-            let emitSpy;
-            let updatePathsSpy;
+            await api.prepare(cordovaProject, options).then(() => {
+                expect(replaceFileContents).toHaveBeenCalledTimes(0);
+                expect(ensureDirSyncSpy).toHaveBeenCalledTimes(0);
+                expect(copySyncSpy).toHaveBeenCalledTimes(0);
+            });
+        });
+    });
 
-            // Mock Data
-            let cordovaProject;
-            let platformResourcesDir;
+    describe('updateSplashes method', function () {
+        // Rewire
+        let prepare;
 
-            beforeEach(function () {
-                prepare = rewire('../../bin/templates/cordova/lib/prepare');
+        // Spies
+        let emitSpy;
+        let updatePathsSpy;
 
-                cordovaProject = {
-                    root: '/mock',
-                    projectConfig: {
-                        path: '/mock/config.xml',
-                        cdvNamespacePrefix: 'cdv'
-                    },
-                    locations: {
-                        plugins: '/mock/plugins',
-                        www: '/mock/www'
-                    }
-                };
-                platformResourcesDir = PATH_RESOURCE;
+        // Mock Data
+        let cordovaProject;
+        let platformResourcesDir;
 
-                emitSpy = jasmine.createSpy('emit');
-                prepare.__set__('events', {
-                    emit: emitSpy
-                });
+        beforeEach(function () {
+            prepare = rewire('../../bin/templates/cordova/lib/prepare');
 
-                updatePathsSpy = jasmine.createSpy('updatePaths');
-                prepare.__set__('FileUpdater', {
-                    updatePaths: updatePathsSpy
-                });
+            cordovaProject = {
+                root: '/mock',
+                projectConfig: {
+                    path: '/mock/config.xml',
+                    cdvNamespacePrefix: 'cdv'
+                },
+                locations: {
+                    plugins: '/mock/plugins',
+                    www: '/mock/www'
+                }
+            };
+            platformResourcesDir = PATH_RESOURCE;
 
-                // mocking initial responses for mapImageResources
-                prepare.__set__('makeSplashCleanupMap', (rootDir, resourcesDir) => ({
-                    [path.join(resourcesDir, 'drawable-mdpi/screen.png')]: null,
-                    [path.join(resourcesDir, 'drawable-mdpi/screen.webp')]: null
-                }));
+            emitSpy = jasmine.createSpy('emit');
+            prepare.__set__('events', {
+                emit: emitSpy
             });
 
-            it('Test#001 : Should detect no defined splash screens.', function () {
-                const updateSplashes = prepare.__get__('updateSplashes');
-
-                // mock data.
-                cordovaProject.projectConfig.getSplashScreens = function (platform) {
-                    return [];
-                };
-
-                updateSplashes(cordovaProject, platformResourcesDir);
-
-                // The emit was called
-                expect(emitSpy).toHaveBeenCalled();
-
-                // The emit message was.
-                const actual = emitSpy.calls.argsFor(0)[1];
-                const expected = 'This app does not have splash screens defined';
-                expect(actual).toEqual(expected);
+            updatePathsSpy = jasmine.createSpy('updatePaths');
+            prepare.__set__('FileUpdater', {
+                updatePaths: updatePathsSpy
             });
 
-            it('Test#02 : Should update splash png icon.', function () {
-                const updateSplashes = prepare.__get__('updateSplashes');
+            // mocking initial responses for mapImageResources
+            prepare.__set__('makeSplashCleanupMap', (rootDir, resourcesDir) => ({
+                [path.join(resourcesDir, 'drawable-mdpi/screen.png')]: null,
+                [path.join(resourcesDir, 'drawable-mdpi/screen.webp')]: null
+            }));
+        });
 
-                // mock data.
-                cordovaProject.projectConfig.getSplashScreens = function (platform) {
-                    return [mockGetSplashScreenItem({
-                        density: 'mdpi',
-                        src: 'res/splash/android/mdpi-screen.png'
-                    })];
-                };
+        it('Test#001 : Should detect no defined splash screens.', function () {
+            const updateSplashes = prepare.__get__('updateSplashes');
 
-                updateSplashes(cordovaProject, platformResourcesDir);
+            // mock data.
+            cordovaProject.projectConfig.getSplashScreens = function (platform) {
+                return [];
+            };
 
-                // The emit was called
-                expect(emitSpy).toHaveBeenCalled();
+            updateSplashes(cordovaProject, platformResourcesDir);
 
-                // The emit message was.
-                const actual = emitSpy.calls.argsFor(0)[1];
-                const expected = 'Updating splash screens at ' + PATH_RESOURCE;
-                expect(actual).toEqual(expected);
+            // The emit was called
+            expect(emitSpy).toHaveBeenCalled();
 
-                const actualResourceMap = updatePathsSpy.calls.argsFor(0)[0];
-                const expectedResourceMap = {};
-                expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.png')] = 'res/splash/android/mdpi-screen.png';
-                expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.webp')] = null;
+            // The emit message was.
+            const actual = emitSpy.calls.argsFor(0)[1];
+            const expected = 'This app does not have splash screens defined';
+            expect(actual).toEqual(expected);
+        });
 
-                expect(actualResourceMap).toEqual(expectedResourceMap);
-            });
+        it('Test#02 : Should update splash png icon.', function () {
+            const updateSplashes = prepare.__get__('updateSplashes');
 
-            it('Test#03 : Should update splash webp icon.', function () {
-                const updateSplashes = prepare.__get__('updateSplashes');
+            // mock data.
+            cordovaProject.projectConfig.getSplashScreens = function (platform) {
+                return [mockGetSplashScreenItem({
+                    density: 'mdpi',
+                    src: 'res/splash/android/mdpi-screen.png'
+                })];
+            };
 
-                // mock data.
-                cordovaProject.projectConfig.getSplashScreens = function (platform) {
-                    return [mockGetSplashScreenItem({
-                        density: 'mdpi',
-                        src: 'res/splash/android/mdpi-screen.webp'
-                    })];
-                };
+            updateSplashes(cordovaProject, platformResourcesDir);
 
-                // Creating Spies
-                updateSplashes(cordovaProject, platformResourcesDir);
+            // The emit was called
+            expect(emitSpy).toHaveBeenCalled();
 
-                // The emit was called
-                expect(emitSpy).toHaveBeenCalled();
+            // The emit message was.
+            const actual = emitSpy.calls.argsFor(0)[1];
+            const expected = 'Updating splash screens at ' + PATH_RESOURCE;
+            expect(actual).toEqual(expected);
 
-                // The emit message was.
-                const actual = emitSpy.calls.argsFor(0)[1];
-                const expected = 'Updating splash screens at ' + PATH_RESOURCE;
-                expect(actual).toEqual(expected);
+            const actualResourceMap = updatePathsSpy.calls.argsFor(0)[0];
+            const expectedResourceMap = {};
+            expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.png')] = 'res/splash/android/mdpi-screen.png';
+            expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.webp')] = null;
 
-                const actualResourceMap = updatePathsSpy.calls.argsFor(0)[0];
+            expect(actualResourceMap).toEqual(expectedResourceMap);
+        });
 
-                const expectedResourceMap = {};
-                expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.webp')] = 'res/splash/android/mdpi-screen.webp';
-                expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.png')] = null;
+        it('Test#03 : Should update splash webp icon.', function () {
+            const updateSplashes = prepare.__get__('updateSplashes');
 
-                expect(actualResourceMap).toEqual(expectedResourceMap);
-            });
+            // mock data.
+            cordovaProject.projectConfig.getSplashScreens = function (platform) {
+                return [mockGetSplashScreenItem({
+                    density: 'mdpi',
+                    src: 'res/splash/android/mdpi-screen.webp'
+                })];
+            };
+
+            // Creating Spies
+            updateSplashes(cordovaProject, platformResourcesDir);
+
+            // The emit was called
+            expect(emitSpy).toHaveBeenCalled();
+
+            // The emit message was.
+            const actual = emitSpy.calls.argsFor(0)[1];
+            const expected = 'Updating splash screens at ' + PATH_RESOURCE;
+            expect(actual).toEqual(expected);
+
+            const actualResourceMap = updatePathsSpy.calls.argsFor(0)[0];
+
+            const expectedResourceMap = {};
+            expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.webp')] = 'res/splash/android/mdpi-screen.webp';
+            expectedResourceMap[path.join(PATH_RESOURCE, 'drawable-mdpi', 'screen.png')] = null;
+
+            expect(actualResourceMap).toEqual(expectedResourceMap);
         });
     });
 });
