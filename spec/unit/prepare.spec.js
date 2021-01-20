@@ -869,7 +869,6 @@ describe('prepare', () => {
         beforeEach(() => {
             Api = rewire('../../bin/templates/cordova/Api');
             prepare = rewire('../../bin/templates/cordova/lib/prepare');
-            // packageName = 'com.company.renamed';
             api = new Api();
 
             initialJavaActivityPath = `${api.locations.javaSrc}/com/company/product/MainActivity.java`.replace(/\//g, '\\');
